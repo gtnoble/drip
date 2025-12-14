@@ -296,6 +296,10 @@ def get_dominant_frequency(drop_radius, surface_type='water'):
     """
     Calculate dominant frequency for a drop based on surface type
     
+    For noise surface types (pink_noise, white_noise), returns the frequency
+    of maximum human hearing sensitivity (~3-4 kHz) since the energy content
+    is broadband. This ensures pessimistic (conservative) audibility filtering.
+    
     Args:
         drop_radius: Drop radius in meters
         surface_type: 'water', 'hard', 'capillary', 'pink_noise', or 'white_noise'
@@ -303,8 +307,12 @@ def get_dominant_frequency(drop_radius, surface_type='water'):
     Returns:
         Dominant frequency in Hz
     """
-    if surface_type == 'hard' or surface_type == 'pink_noise' or surface_type == 'white_noise':
-        # Hard surface / pink noise / white noise: frequency from contact time
+    if surface_type == 'pink_noise' or surface_type == 'white_noise':
+        # Broadband noise: use frequency of maximum hearing sensitivity
+        # A-weighting peaks around 3-4 kHz (pessimistic for audibility)
+        return 3500.0
+    elif surface_type == 'hard':
+        # Hard surface: frequency from contact time
         diameter = 2 * drop_radius
         velocity = terminal_velocity(drop_radius)
         contact_time = diameter / velocity
