@@ -1,10 +1,10 @@
 /**
- * Poisson process rain synthesis
+ * Circular buffer rain synthesis
  * 
- * Uses sample-by-sample Poisson process to determine drop timing.
- * At each sample, draws number of drops from Poisson(λ = drop_rate / sample_rate).
+ * Uses uniform random offset placement within circular buffer for seamless looping.
+ * Total drops determined by drop_rate × duration, placed at random positions.
  * Drop parameters generated using M-H sampling for audibility.
- * Provides sequential buffer writes and streaming capability.
+ * Provides seamless circular buffer generation with wrap-around grain handling.
  */
 module synthesis;
 
@@ -13,7 +13,7 @@ import std.math : sqrt, log10;
 import std.typecons : tuple;
 import std.algorithm : max;
 import mir.random : Random, unpredictableSeed;
-import mir.random.variable : poissonVar;
+import mir.random.variable : poissonVar, uniformVar;
 
 import physics;
 import grain;
@@ -21,10 +21,10 @@ import propagation;
 import sampler;
 
 /**
- * Synthesize rain using Poisson process and physics-based granular synthesis
+ * Synthesize rain using circular buffer with uniform random offset placement
  * 
  * Params:
- *   duration = Length in seconds
+ *   duration = Length in seconds (also buffer size)
  *   rain_rate = Rainfall rate in mm/hr (controls drop size distribution)
  *   Q = Quality factor (controls resonance: low Q=splashy, high Q=tonal)
  *   ear_separation = Distance between ears in meters
@@ -35,9 +35,8 @@ import sampler;
  *   mh_burn_in = M-H burn-in iterations
  *   mh_radius_scale = M-H proposal scale for radius (0=auto)
  *   mh_position_scale = M-H proposal scale for position in meters
- *   drop_rate = Number of drops per second
+ *   drop_rate = Total drops per second for the entire buffer
  *   surface_type = "water", "pink_noise", or "white_noise"
- *   buffer_size = Sliding window buffer size in samples
  * 
  * Returns:
  *   Tuple of (left_channel, right_channel) float arrays
@@ -48,56 +47,39 @@ auto synthesize_rain(
     double Q = 10.0,
     double ear_separation = 0.17,
     double listener_height = 1.7,
-    int sample_rate = 44100,
+    int sample_rate = 44_100,
     uint seed = 0,
     bool hearing_threshold_enabled = true,
     int mh_burn_in = 1000,
     double mh_radius_scale = 0.0,
     double mh_position_scale = 5.0,
     double drop_rate = 5000.0,
-    string surface_type = "water",
-    int buffer_size = 22050
+    string surface_type = "water"
 ) {
     // If seed is 0, generate random seed
     uint base_seed = (seed == 0) ? cast(uint)unpredictableSeed : seed;
     
-    // Calculate total samples and Poisson lambda
-    int n_samples = cast(int)(duration * sample_rate);
-    double lambda = drop_rate / cast(double)sample_rate;  // Expected drops per sample
+    // Calculate buffer size from duration
+    int buffer_size = cast(int)(duration * sample_rate);
     
-    // Calculate maximum grain duration for buffer size validation
-    double max_drop_radius = 0.005;  // 5mm
-    double max_grain_duration = calculate_impulse_duration(max_drop_radius, surface_type, Q);
-    int max_grain_samples = cast(int)(max_grain_duration * sample_rate);
+    // Calculate total number of drops
+    int total_drops = cast(int)(drop_rate * duration);
     
-    if (buffer_size < max_grain_samples) {
-        stderr.writefln("WARNING: buffer_size (%d samples = %.3fs) < max_grain_duration (%d samples = %.3fs)",
-                       buffer_size, buffer_size / cast(double)sample_rate,
-                       max_grain_samples, max_grain_duration);
-        stderr.writefln("         Grains may be truncated! Consider increasing --buffer-size");
-    }
-    
-    stderr.writefln("Generating rain with Poisson process (λ = %.6f drops/sample)", lambda);
-    stderr.writefln("Duration: %.1fs (%d samples)", duration, n_samples);
-    stderr.writefln("Expected total drops: ~%.0f", drop_rate * duration);
+    stderr.writefln("Generating rain with circular buffer and uniform random offsets");
+    stderr.writefln("Duration: %.1fs (%d samples)", duration, buffer_size);
+    stderr.writefln("Total drops: %d", total_drops);
     stderr.writefln("Rain rate: %.1f mm/hr (drop size distribution)", rain_rate);
     stderr.writefln("Drop rate: %.1f drops/s", drop_rate);
     stderr.writefln("Q factor: %.1f", Q);
     stderr.writefln("Surface type: %s", surface_type);
-    stderr.writefln("Buffer size: %d samples (%.3fs)", buffer_size, buffer_size / cast(double)sample_rate);
     stderr.writefln("M-H burn-in: %d", mh_burn_in);
+    stderr.writefln("Seed: %u", base_seed);
     
-    // Allocate sliding window buffers
+    // Allocate circular buffers (same size as duration)
     float[] buffer_L = new float[buffer_size];
     float[] buffer_R = new float[buffer_size];
     foreach (ref s; buffer_L) s = 0.0;
     foreach (ref s; buffer_R) s = 0.0;
-    
-    // Allocate output buffers
-    float[] output_L = new float[n_samples];
-    float[] output_R = new float[n_samples];
-    foreach (ref s; output_L) s = 0.0;
-    foreach (ref s; output_R) s = 0.0;
     
     // Initialize drop sampler state
     auto sampler_state = initialize_drop_sampler(
@@ -106,101 +88,82 @@ auto synthesize_rain(
         mh_position_scale, base_seed, surface_type, Q
     );
     
-    // Initialize Poisson RNG (separate from M-H RNG)
-    auto poisson_rng = Random(base_seed + 1);
-    auto poisson_dist = poissonVar!double(lambda);
+    // Initialize RNG for drop placement (separate from M-H RNG)
+    auto placement_rng = Random(base_seed + 1);
+    
+    // Pre-create uniform distribution for better performance
+    auto uniform_dist = uniformVar!int(0, buffer_size);
     
     // Ear positions
     Position ear_left = Position(-ear_separation / 2.0, 0.0, listener_height);
     Position ear_right = Position(ear_separation / 2.0, 0.0, listener_height);
     
-    int total_drops_generated = 0;
-    int buffer_write_pos = 0;  // Track position in sliding buffer
+    // We'll generate drop positions on-the-fly using mir.random.variable.uniformVar
     
-    // Progress reporting
+    stderr.writefln("Placing %d drops at uniform random positions...", total_drops);
+    
+    // Process each drop
     int last_progress_pct = -1;
-    
-    // Process each sample in time order (Poisson process)
-    foreach (sample_idx; 0 .. n_samples) {
-        // Sample number of drops at this time instant
-        int n_drops = cast(int)poisson_dist(poisson_rng);
+    foreach (drop_idx; 0 .. total_drops) {
+        // Sample drop parameters using M-H
+        auto drop = sample_drop(sampler_state);
+        double drop_R = drop.radius;
+        double drop_x = drop.position.x;
+        double drop_y = drop.position.y;
+        double drop_z = drop.position.z;
         
-        // Generate each drop for this sample time
-        foreach (drop_num; 0 .. n_drops) {
-            // Sample drop parameters using M-H
-            auto drop = sample_drop(sampler_state);
-            double drop_R = drop.radius;
-            double drop_x = drop.position.x;
-            double drop_y = drop.position.y;
-            double drop_z = drop.position.z;
+        // Calculate physical properties
+        double f0 = get_dominant_frequency(drop_R, surface_type);
+        double acoustic_energy = acoustic_amplitude(drop_R);
+        Position drop_pos = Position(drop_x, drop_y, drop_z);
+        
+        // Drop position in buffer (uniform random on-the-fly)
+        int buffer_pos = uniform_dist(placement_rng);
+        double event_time = cast(double)buffer_pos / cast(double)sample_rate;
+        
+        // Create grain ranges and propagate to circular buffer
+        if (surface_type == "water") {
+            auto grain_L = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy);
+            propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
+                                       buffer_L, buffer_pos, sample_rate);
             
-            // Calculate physical properties
-            double f0 = get_dominant_frequency(drop_R, surface_type);
-            double acoustic_energy = acoustic_amplitude(drop_R);
-            Position drop_pos = Position(drop_x, drop_y, drop_z);
+            auto grain_R = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy);
+            propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
+                                       buffer_R, buffer_pos, sample_rate);
+        } else if (surface_type == "pink_noise") {
+            auto grain_L = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+            propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
+                                       buffer_L, buffer_pos, sample_rate);
             
-            // Calculate event time for this sample
-            double event_time = cast(double)sample_idx / cast(double)sample_rate;
+            auto grain_R = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+            propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
+                                       buffer_R, buffer_pos, sample_rate);
+        } else if (surface_type == "white_noise") {
+            auto grain_L = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+            propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
+                                       buffer_L, buffer_pos, sample_rate);
             
-            // Create grain ranges and propagate to sliding buffer
-            if (surface_type == "water") {
-                auto grain_L = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy);
-                propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
-                                           buffer_L, buffer_write_pos, sample_rate);
-                
-                auto grain_R = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy);
-                propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
-                                           buffer_R, buffer_write_pos, sample_rate);
-            } else if (surface_type == "pink_noise") {
-                auto grain_L = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-                propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
-                                           buffer_L, buffer_write_pos, sample_rate);
-                
-                auto grain_R = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-                propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
-                                           buffer_R, buffer_write_pos, sample_rate);
-            } else if (surface_type == "white_noise") {
-                auto grain_L = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-                propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
-                                           buffer_L, buffer_write_pos, sample_rate);
-                
-                auto grain_R = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-                propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
-                                           buffer_R, buffer_write_pos, sample_rate);
-            }
-            
-            total_drops_generated++;
+            auto grain_R = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+            propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
+                                       buffer_R, buffer_pos, sample_rate);
         }
         
-        // Write completed sample from buffer to output
-        // The current sample is at buffer_write_pos in the circular buffer
-        output_L[sample_idx] = buffer_L[buffer_write_pos];
-        output_R[sample_idx] = buffer_R[buffer_write_pos];
-        
-        // Clear buffer position for future use (circular buffer)
-        buffer_L[buffer_write_pos] = 0.0;
-        buffer_R[buffer_write_pos] = 0.0;
-        
-        // Advance circular buffer write position
-        buffer_write_pos = (buffer_write_pos + 1) % buffer_size;
-        
         // Progress reporting
-        int progress_pct = cast(int)((sample_idx * 100) / n_samples);
-        if (progress_pct != last_progress_pct && progress_pct % 5 == 0) {
-            stderr.writefln("  Progress: %d%% (%d drops generated)...", 
-                          progress_pct, total_drops_generated);
+        int progress_pct = cast(int)((drop_idx * 100) / total_drops);
+        if (progress_pct != last_progress_pct && progress_pct % 10 == 0) {
+            stderr.writefln("  Progress: %d%%...", progress_pct);
             last_progress_pct = progress_pct;
         }
     }
     
     double acceptance_rate = get_acceptance_rate(sampler_state);
     stderr.writefln("Completed: %d drops generated (M-H acceptance: %.2f%%)",
-                   total_drops_generated, acceptance_rate * 100.0);
+                   total_drops, acceptance_rate * 100.0);
     
-    // Normalize
-    normalize_buffers(output_L, output_R);
+    // Normalize circular buffers
+    normalize_buffers(buffer_L, buffer_R);
     
-    return tuple(output_L, output_R);
+    return tuple(buffer_L, buffer_R);
 }
 
 /**

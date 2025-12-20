@@ -27,7 +27,7 @@ struct Options {
     double rain_rate = 10.0;
     
     @Option("drop-rate")
-    @Help("Number of drops per second - controls sound density (default: 5000.0)")
+    @Help("Total drops per second distributed across the buffer (default: 5000.0)")
     double drop_rate = 5000.0;
     
     @Option("quality-factor", "q")
@@ -70,9 +70,7 @@ struct Options {
     @Help("M-H position proposal scale in meters (default: 5.0)")
     double mh_position_scale = 5.0;
     
-    @Option("buffer-size", "b")
-    @Help("Sliding window buffer size in samples (default: 22050 = 0.5s at 44.1kHz)")
-    int buffer_size = 22050;
+    
 }
 
 /**
@@ -160,12 +158,6 @@ void main(string[] args) {
         return;
     }
     
-    // Validate buffer size
-    if (options.buffer_size < 1024) {
-        stderr.writeln("Error: --buffer-size must be at least 1024 samples");
-        return;
-    }
-    
     // Synthesize rain
     try {
         auto result = synthesize_rain(
@@ -181,8 +173,7 @@ void main(string[] args) {
             0.0,  // auto radius scale
             options.mh_position_scale,
             options.drop_rate,
-            options.surface_type,
-            options.buffer_size
+            options.surface_type
         );
         
         // Write output
