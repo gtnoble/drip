@@ -17,6 +17,7 @@ import mir.random.variable : normalVar;
 
 import filter;
 import physics;
+import surface;
 
 /**
  * Infinite pink noise generator using Voss-McCartney algorithm
@@ -90,12 +91,23 @@ struct WaterGrainRange {
      *   Q = Quality factor (2=splashy, 20=tonal)
      *   sample_rate = Sample rate in Hz
      *   acoustic_energy = Acoustic energy in Joules
+     *   surface_type = Surface type enumerator (water, capillary) for different resonance types (default: water)
      */
-    static WaterGrainRange create(double drop_radius, double Q, int sample_rate, double acoustic_energy) {
+    static WaterGrainRange create(double drop_radius, double Q, int sample_rate, double acoustic_energy, SurfaceType surface_type = SurfaceType.water) {
         WaterGrainRange range;
         
-        // Calculate Minnaert frequency
-        double freq = minnaert_frequency(drop_radius);
+        // Calculate frequency based on surface type
+        double freq;
+        final switch (surface_type) {
+            case SurfaceType.capillary:
+                freq = capillary_frequency(drop_radius);
+                break;
+            case SurfaceType.water:
+            case SurfaceType.pink_noise:
+            case SurfaceType.white_noise:
+                freq = minnaert_frequency(drop_radius);
+                break;
+        }
         
         // Duration based on decay time (Q/f)
         double decay_time = Q / freq;
@@ -459,21 +471,21 @@ unittest {
         
         // Water grain
         auto water_grain = WaterGrainRange.create(radius, 10.0, sample_rate, acoustic_energy);
-        double water_duration = calculate_impulse_duration(radius, "water", 10.0);
+        double water_duration = calculate_impulse_duration(radius, SurfaceType.water, 10.0);
         int expected_water_samples = cast(int)(water_duration * sample_rate);
         assert(water_grain.n_samples == expected_water_samples, 
                "Water grain duration should match physics calculation");
         
         // Pink noise grain
         auto pink_grain = PinkNoiseGrainRange.create(radius, sample_rate, rng, acoustic_energy);
-        double pink_duration = calculate_impulse_duration(radius, "pink_noise");
+        double pink_duration = calculate_impulse_duration(radius, SurfaceType.pink_noise);
         int expected_pink_samples = cast(int)(pink_duration * sample_rate);
         assert(pink_grain.n_samples == expected_pink_samples,
                "Pink grain duration should match physics calculation");
         
         // White noise grain
         auto white_grain = WhiteNoiseGrainRange.create(radius, sample_rate, rng, acoustic_energy);
-        double white_duration = calculate_impulse_duration(radius, "white_noise");
+        double white_duration = calculate_impulse_duration(radius, SurfaceType.white_noise);
         int expected_white_samples = cast(int)(white_duration * sample_rate);
         assert(white_grain.n_samples == expected_white_samples,
                "White grain duration should match physics calculation");

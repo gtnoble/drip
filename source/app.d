@@ -9,6 +9,7 @@ import std.typecons : tuple;
 import darg;
 
 import synthesis;
+import surface;
 
 /**
  * Command-line arguments
@@ -30,10 +31,6 @@ struct Options {
     @Help("Total drops per second distributed across the buffer (default: 5000.0)")
     double drop_rate = 5000.0;
     
-    @Option("quality-factor", "q")
-    @Help("Quality factor Q: controls resonance (2=splashy, 20=tonal, default: 10.0)")
-    double quality_factor = 10.0;
-    
     @Option("ear-separation", "e")
     @Help("Ear separation in meters (default: 0.17)")
     double ear_separation = 0.17;
@@ -51,8 +48,8 @@ struct Options {
     string output = "";
     
     @Option("surface-type", "s")
-    @Help("Surface type: water, pink_noise, white_noise (default: water)")
-    string surface_type = "water";
+    @Help("Surface type: water, capillary, pink_noise, white_noise (default: water)")
+    string surface_type = "water";  // Keep as string for command line parsing
     
     @Option("seed")
     @Help("Random seed for reproducibility (default: random)")
@@ -150,11 +147,12 @@ void main(string[] args) {
         return;
     }
     
-    // Validate surface type
-    if (options.surface_type != "water" && 
-        options.surface_type != "pink_noise" && 
-        options.surface_type != "white_noise") {
-        stderr.writeln("Error: --surface-type must be water, pink_noise, or white_noise");
+    // Parse and validate surface type
+    SurfaceType surface_enum;
+    try {
+        surface_enum = parseSurfaceType(options.surface_type);
+    } catch (Exception e) {
+        stderr.writeln("Error: --surface-type must be water, capillary, pink_noise, or white_noise");
         return;
     }
     
@@ -163,7 +161,6 @@ void main(string[] args) {
         auto result = synthesize_rain(
             options.duration,
             options.rain_rate,
-            options.quality_factor,
             options.ear_separation,
             options.listener_height,
             options.sample_rate,
@@ -173,7 +170,7 @@ void main(string[] args) {
             0.0,  // auto radius scale
             options.mh_position_scale,
             options.drop_rate,
-            options.surface_type
+            surface_enum
         );
         
         // Write output

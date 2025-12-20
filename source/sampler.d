@@ -13,6 +13,7 @@ import mir.random.variable : normalVar, uniformVar, poissonVar;
 
 import physics;
 import propagation;
+import surface;
 
 /**
  * Drop parameters (without time - handled by Poisson process)
@@ -40,8 +41,7 @@ struct DropSamplerState {
     bool hearing_threshold_enabled;
     double radius_scale;
     double position_scale;
-    string surface_type;
-    double Q;
+    SurfaceType surface_type;
     double z_current = 0.0;  // All drops on z=0 plane
 }
 
@@ -58,15 +58,13 @@ DropSamplerState initialize_drop_sampler(
     double radius_scale,
     double position_scale,
     uint seed,
-    string surface_type,
-    double Q) {
+    SurfaceType surface_type) {
     
     DropSamplerState state = DropSamplerState.init;
     state.rain_rate = rain_rate;
     state.sample_rate = sample_rate;
     state.hearing_threshold_enabled = hearing_threshold_enabled;
     state.surface_type = surface_type;
-    state.Q = Q;
     
     // Ear positions (3D: x, y, z)
     state.ear_L = Position(-ear_separation / 2.0, 0.0, listener_height);
@@ -180,14 +178,13 @@ bool is_audible(ref DropSamplerState state, double R, double x, double y) {
             
             // Calculate received energy
             double geometric_attenuation = 1.0 / (distance * distance);
-            
-            // Check against hearing threshold
-            double threshold = hearing_threshold_pa(frequency);
             double impulse_duration = calculate_impulse_duration(R, state.surface_type);
-
             double air_gain = air_absorption_gain(frequency, distance);
             double attenuated_energy = source_energy * geometric_attenuation * air_gain;
+
+            // Check against hearing threshold
             double attenuated_pa = acoustic_energy_to_pressure(attenuated_energy, impulse_duration);
+            double threshold = hearing_threshold_pa(frequency);
             return attenuated_pa >= threshold;
         }
         

@@ -19,6 +19,7 @@ import physics;
 import grain;
 import propagation;
 import sampler;
+import surface;
 
 /**
  * Synthesize rain using circular buffer with uniform random offset placement
@@ -26,7 +27,6 @@ import sampler;
  * Params:
  *   duration = Length in seconds (also buffer size)
  *   rain_rate = Rainfall rate in mm/hr (controls drop size distribution)
- *   Q = Quality factor (controls resonance: low Q=splashy, high Q=tonal)
  *   ear_separation = Distance between ears in meters
  *   listener_height = Height above raindrop plane in meters
  *   sample_rate = Audio sample rate in Hz
@@ -36,7 +36,7 @@ import sampler;
  *   mh_radius_scale = M-H proposal scale for radius (0=auto)
  *   mh_position_scale = M-H proposal scale for position in meters
  *   drop_rate = Total drops per second for the entire buffer
- *   surface_type = "water", "pink_noise", or "white_noise"
+ *   surface_type = Surface type enumerator (water, capillary, pink_noise, white_noise)
  * 
  * Returns:
  *   Tuple of (left_channel, right_channel) float arrays
@@ -44,7 +44,6 @@ import sampler;
 auto synthesize_rain(
     double duration,
     double rain_rate = 10.0,
-    double Q = 10.0,
     double ear_separation = 0.17,
     double listener_height = 1.7,
     int sample_rate = 44_100,
@@ -54,7 +53,7 @@ auto synthesize_rain(
     double mh_radius_scale = 0.0,
     double mh_position_scale = 5.0,
     double drop_rate = 5000.0,
-    string surface_type = "water"
+    SurfaceType surface_type = SurfaceType.water
 ) {
     // If seed is 0, generate random seed
     uint base_seed = (seed == 0) ? cast(uint)unpredictableSeed : seed;
@@ -70,7 +69,6 @@ auto synthesize_rain(
     stderr.writefln("Total drops: %d", total_drops);
     stderr.writefln("Rain rate: %.1f mm/hr (drop size distribution)", rain_rate);
     stderr.writefln("Drop rate: %.1f drops/s", drop_rate);
-    stderr.writefln("Q factor: %.1f", Q);
     stderr.writefln("Surface type: %s", surface_type);
     stderr.writefln("M-H burn-in: %d", mh_burn_in);
     stderr.writefln("Seed: %u", base_seed);
@@ -85,7 +83,7 @@ auto synthesize_rain(
     auto sampler_state = initialize_drop_sampler(
         rain_rate, ear_separation, listener_height, sample_rate,
         hearing_threshold_enabled, mh_burn_in, mh_radius_scale,
-        mh_position_scale, base_seed, surface_type, Q
+        mh_position_scale, base_seed, surface_type
     );
     
     // Initialize RNG for drop placement (separate from M-H RNG)
@@ -122,30 +120,37 @@ auto synthesize_rain(
         double event_time = cast(double)buffer_pos / cast(double)sample_rate;
         
         // Create grain ranges and propagate to circular buffer
-        if (surface_type == "water") {
-            auto grain_L = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy);
-            propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
-                                       buffer_L, buffer_pos, sample_rate);
-            
-            auto grain_R = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy);
-            propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
-                                       buffer_R, buffer_pos, sample_rate);
-        } else if (surface_type == "pink_noise") {
-            auto grain_L = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-            propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
-                                       buffer_L, buffer_pos, sample_rate);
-            
-            auto grain_R = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-            propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
-                                       buffer_R, buffer_pos, sample_rate);
-        } else if (surface_type == "white_noise") {
-            auto grain_L = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-            propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
-                                       buffer_L, buffer_pos, sample_rate);
-            
-            auto grain_R = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
-            propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
-                                       buffer_R, buffer_pos, sample_rate);
+        final switch (surface_type) {
+            case SurfaceType.water:
+            case SurfaceType.capillary:
+                // Calculate physics-based Q factor
+                double Q = get_quality_factor(drop_R, surface_type);
+                auto grain_L = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy, surface_type);
+                propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
+                                           buffer_L, buffer_pos, sample_rate);
+                
+                auto grain_R = WaterGrainRange.create(drop_R, Q, sample_rate, acoustic_energy, surface_type);
+                propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
+                                           buffer_R, buffer_pos, sample_rate);
+                break;
+            case SurfaceType.pink_noise:
+                auto grain_L = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+                propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
+                                           buffer_L, buffer_pos, sample_rate);
+                
+                auto grain_R = PinkNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+                propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
+                                           buffer_R, buffer_pos, sample_rate);
+                break;
+            case SurfaceType.white_noise:
+                auto grain_L = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+                propagate_to_sliding_buffer(grain_L, f0, drop_pos, ear_left,
+                                           buffer_L, buffer_pos, sample_rate);
+                
+                auto grain_R = WhiteNoiseGrainRange.create(drop_R, sample_rate, sampler_state.rng, acoustic_energy);
+                propagate_to_sliding_buffer(grain_R, f0, drop_pos, ear_right,
+                                           buffer_R, buffer_pos, sample_rate);
+                break;
         }
         
         // Progress reporting

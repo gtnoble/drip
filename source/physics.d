@@ -9,6 +9,15 @@ module physics;
 import std.math : sqrt, exp, log10, PI, pow;
 import mir.random : Random;
 import mir.random.variable : exponentialVar;
+import surface;
+
+enum rho_water = 1000.0;  // kg/m³
+enum rho_air = 1.225;     // kg/m³
+enum water_surface_tension = 0.072;  // N/m
+enum c_air = 343.0;          // Speed of sound in air (m/s)
+enum c_water = 1482.0;       // Speed of sound in water (m/s) at 20°C
+enum air_polytopic_index = 1.4; // For adiabatic processes in air
+enum p_atm = 101325.0;      // Atmospheric pressure in Pascals
 
 /**
  * Calculate Minnaert resonance frequency for air bubble
@@ -25,6 +34,56 @@ double minnaert_frequency(double drop_radius) {
     // Bubble radius ≈ 0.7 × drop radius (Newton's impact depth approximation)
     double bubble_radius = 0.7 * drop_radius;
     return 3.26 / bubble_radius;
+}
+
+double sphere_surface_area(double radius) {
+    return 4.0 * PI * radius ^^ 2;
+}
+
+double sphere_volume(double radius) {
+    return (4.0/3.0) * PI * radius ^^ 3;
+}
+
+double minnaert_quality_factor(double drop_radius) {
+    double acoustic_radiation_resistance = rho_water * c_water;
+    double compression_mechanical_capacitance = sphere_volume(drop_radius) / (air_polytopic_index * p_atm);
+    double displacement_mechanical_inductance = rho_water / (4 * PI * drop_radius);
+    double q_minnaert = 
+        sqrt(displacement_mechanical_inductance / compression_mechanical_capacitance) / 
+        acoustic_radiation_resistance;
+    return q_minnaert;
+}
+
+/**
+ * Calculate capillary wave resonance frequency from surface tension
+ * 
+ * f = sqrt(σ / m) where σ is surface tension and m is drop mass
+ * 
+ * Params:
+ *   drop_radius = Drop radius in meters
+ * 
+ * Returns:
+ *   Frequency in Hz
+ */
+double capillary_frequency(double drop_radius) {
+    enum double surface_tension = 0.072;  // N/m (water-air interface at 20°C)
+    
+    // Drop mass
+    double volume = (4.0/3.0) * PI * drop_radius^^3;
+    double mass = volume * rho_water;
+    
+    // Capillary frequency
+    return sqrt(surface_tension / mass);
+}
+
+double capillary_quality_factor(double drop_radius) {
+    double mass_mechanical_inductance = (4.0/3.0) * PI * drop_radius^^3 * rho_water; // kg
+    double tension_mechanical_capacitance = 1.0 / water_surface_tension;
+    double acoustic_radiation_resistance = rho_air * c_air * 2.0 * PI * drop_radius^^2;
+    double Q_capillary = 
+        sqrt(mass_mechanical_inductance / tension_mechanical_capacitance) / 
+        acoustic_radiation_resistance;
+    return Q_capillary;
 }
 
 /**
@@ -192,18 +251,23 @@ double marshall_palmer_lambda(double rain_rate_mm_hr) {
  * 
  * Params:
  *   drop_radius = Drop radius in meters
- *   surface_type = "water", "pink_noise", or "white_noise"
+ *   surface_type = Surface type enumerator (water, capillary, pink_noise, white_noise)
  * 
  * Returns:
  *   Dominant frequency in Hz
  */
-double get_dominant_frequency(double drop_radius, string surface_type) {
-    if (surface_type == "pink_noise" || surface_type == "white_noise") {
-        // Use frequency of peak hearing sensitivity for conservative audibility check
-        return 3500.0;
-    } else {
-        // Water surface: use Minnaert frequency
-        return minnaert_frequency(drop_radius);
+double get_dominant_frequency(double drop_radius, SurfaceType surface_type) {
+    final switch (surface_type) {
+        case SurfaceType.pink_noise:
+        case SurfaceType.white_noise:
+            // Use frequency of peak hearing sensitivity for conservative audibility check
+            return 3_500.0;
+        case SurfaceType.capillary:
+            // Capillary wave resonance from surface tension
+            return capillary_frequency(drop_radius);
+        case SurfaceType.water:
+            // Water surface: use Minnaert frequency
+            return minnaert_frequency(drop_radius);
     }
 }
 
@@ -218,26 +282,59 @@ double get_dominant_frequency(double drop_radius, string surface_type) {
  * Returns:
  *   Duration in seconds
  */
-double calculate_impulse_duration(double drop_radius, string surface_type, double Q = 10.0) {
-    if (surface_type == "pink_noise" || surface_type == "white_noise") {
-        // Contact time: t_contact = diameter / velocity
-        double diameter = 2.0 * drop_radius;
-        double velocity = terminal_velocity(drop_radius);
-        double contact_time = diameter / velocity;
-        
-        // Duration = 4 × contact_time, capped at 0.1 seconds
-        double duration = 4.0 * contact_time;
-        if (duration > 0.1) duration = 0.1;
-        return duration;
-    } else {
-        // Water surface: decay time from Q factor
-        double frequency = minnaert_frequency(drop_radius);
-        double decay_time = Q / frequency;
-        
-        // Duration = 4 × decay_time, capped at 0.5 seconds
-        double duration = 4.0 * decay_time;
-        if (duration > 0.5) duration = 0.5;
-        return duration;
+double calculate_impulse_duration(double drop_radius, SurfaceType surface_type, double Q = 10.0) {
+    final switch (surface_type) {
+        case SurfaceType.pink_noise:
+        case SurfaceType.white_noise:
+            // Contact time: t_contact = diameter / velocity
+            double diameter = 2.0 * drop_radius;
+            double velocity = terminal_velocity(drop_radius);
+            double contact_time = diameter / velocity;
+            
+            // Duration = 4 × contact_time, capped at 0.1 seconds
+            double duration = 4.0 * contact_time;
+            if (duration > 0.1) duration = 0.1;
+            return duration;
+        case SurfaceType.water:
+        case SurfaceType.capillary:
+            // Water surface or capillary: decay time from Q factor
+            double frequency;
+            if (surface_type == SurfaceType.capillary) {
+                frequency = capillary_frequency(drop_radius);
+            } else {
+                frequency = minnaert_frequency(drop_radius);
+            }
+            double decay_time = Q / frequency;
+            
+            // Duration = 4 × decay_time, capped at 0.5 seconds
+            double water_duration = 4.0 * decay_time;
+            if (water_duration > 0.5) water_duration = 0.5;
+            return water_duration;
+    }
+}
+
+/**
+ * Get quality factor for a drop based on surface type
+ * 
+ * Returns physics-based quality factor for water and capillary surfaces.
+ * For noise surfaces, returns 0 as Q is not used in noise generation.
+ * 
+ * Params:
+ *   drop_radius = Drop radius in meters
+ *   surface_type = Surface type enumerator
+ * 
+ * Returns:
+ *   Quality factor calculated from physical principles
+ */
+double get_quality_factor(double drop_radius, SurfaceType surface_type) {
+    final switch (surface_type) {
+        case SurfaceType.water:
+            return minnaert_quality_factor(drop_radius);
+        case SurfaceType.capillary:
+            return capillary_quality_factor(drop_radius);
+        case SurfaceType.pink_noise:
+        case SurfaceType.white_noise:
+            return 0.0;  // Q not used for noise sources
     }
 }
 
@@ -334,13 +431,13 @@ unittest {
         double radius = 0.001;  // 1mm
         
         // Water surface should use Minnaert frequency
-        double freq_water = get_dominant_frequency(radius, "water");
+        double freq_water = get_dominant_frequency(radius, SurfaceType.water);
         assert(approxEqual(freq_water, minnaert_frequency(radius), 0.01), 
                "Water surface should use Minnaert frequency");
         
         // Noise surfaces should use peak hearing sensitivity (~3.5 kHz)
-        double freq_pink = get_dominant_frequency(radius, "pink_noise");
-        double freq_white = get_dominant_frequency(radius, "white_noise");
+        double freq_pink = get_dominant_frequency(radius, SurfaceType.pink_noise);
+        double freq_white = get_dominant_frequency(radius, SurfaceType.white_noise);
         assert(approxEqual(freq_pink, 3500.0, 0.01), "Pink noise should use 3.5 kHz");
         assert(approxEqual(freq_white, 3500.0, 0.01), "White noise should use 3.5 kHz");
     }
@@ -350,12 +447,12 @@ unittest {
         double radius = 0.001;
         
         // Water surface duration should be based on Q factor
-        double dur_water = calculate_impulse_duration(radius, "water", 10.0);
+        double dur_water = calculate_impulse_duration(radius, SurfaceType.water, 10.0);
         assert(dur_water > 0.0 && dur_water < 1.0, "Water duration should be reasonable");
         
         // Noise surface duration should be based on contact time
-        double dur_pink = calculate_impulse_duration(radius, "pink_noise");
-        double dur_white = calculate_impulse_duration(radius, "white_noise");
+        double dur_pink = calculate_impulse_duration(radius, SurfaceType.pink_noise);
+        double dur_white = calculate_impulse_duration(radius, SurfaceType.white_noise);
         assert(dur_pink > 0.0 && dur_pink <= 0.1, "Pink noise duration in valid range");
         assert(dur_white > 0.0 && dur_white <= 0.1, "White noise duration in valid range");
     }
