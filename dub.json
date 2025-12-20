@@ -1,0 +1,30 @@
+{
+	"authors": [
+		"Garret Noble"
+	],
+	"copyright": "Copyright © 2025, Garret Noble",
+	"dependencies": {
+		"darg": "~>0.1.0",
+		"mir-algorithm": "~>3.22.4",
+		"mir-random": "~>2.2.20",
+		"wave-d": "~>1.0.8"
+	},
+	"description": "A physically-based rain sound generator",
+	"license": "MIT",
+	"name": "drip",
+	"configurations": [
+		{
+			"name": "default",
+			"targetType": "executable"
+		},
+		{
+			"name": "profile",
+			"targetType": "executable",
+			"buildTypes": {
+				"profile": {
+					"buildOptions": ["profile", "debugInfo"]
+				}
+			}
+		}
+	]
+}

@@ -1,0 +1,12 @@
+{
+	"fileVersion": 1,
+	"versions": {
+		"darg": "0.1.0",
+		"mir-algorithm": "3.22.4",
+		"mir-core": "1.7.3",
+		"mir-linux-kernel": "1.2.1",
+		"mir-random": "2.2.20",
+		"silly": "1.1.1",
+		"wave-d": "1.0.8"
+	}
+}

@@ -1,4 +1,10 @@
 *.wav
 *.mp3
+*.log
+*.log.old
+*.def
+*.a
+drip
+drip-test-library
 /__pycache__/
 /memory-bank/
