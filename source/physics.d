@@ -83,9 +83,10 @@ double capillary_quality_factor(double drop_radius) {
     double mass_mechanical_inductance = (4.0/3.0) * PI * drop_radius^^3 * rho_water; // kg
     double tension_mechanical_capacitance = 1.0 / water_surface_tension;
     double acoustic_radiation_resistance = rho_air * c_air * 2.0 * PI * drop_radius^^2;
+    double viscous_resistance = water_viscosity * PI * drop_radius;
     double Q_capillary = 
         sqrt(mass_mechanical_inductance / tension_mechanical_capacitance) / 
-        acoustic_radiation_resistance;
+        (acoustic_radiation_resistance + viscous_resistance);
     return Q_capillary;
 }
 
