@@ -18,6 +18,8 @@ enum c_air = 343.0;          // Speed of sound in air (m/s)
 enum c_water = 1482.0;       // Speed of sound in water (m/s) at 20°C
 enum air_polytopic_index = 1.4; // For adiabatic processes in air
 enum p_atm = 101325.0;      // Atmospheric pressure in Pascals
+// enum water_viscosity = 0.0008891; // Pa·s (dynamic viscosity of water at 25°C)
+enum water_viscosity = 1.0; // Pa·s (dynamic viscosity of water at 25°C)
 
 /**
  * Calculate Minnaert resonance frequency for air bubble
@@ -46,11 +48,12 @@ double sphere_volume(double radius) {
 
 double minnaert_quality_factor(double drop_radius) {
     double acoustic_radiation_resistance = rho_water * c_water;
+    double viscous_resistance = water_viscosity / sphere_volume(drop_radius);
     double compression_mechanical_capacitance = sphere_volume(drop_radius) / (air_polytopic_index * p_atm);
     double displacement_mechanical_inductance = rho_water / (4 * PI * drop_radius);
     double q_minnaert = 
         sqrt(displacement_mechanical_inductance / compression_mechanical_capacitance) / 
-        acoustic_radiation_resistance;
+        (acoustic_radiation_resistance + viscous_resistance);
     return q_minnaert;
 }
 
