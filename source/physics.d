@@ -35,7 +35,7 @@ enum water_viscosity = 1.0; // Pa·s (dynamic viscosity of water at 25°C)
 double minnaert_frequency(double drop_radius) {
     // Bubble radius ≈ 0.7 × drop radius (Newton's impact depth approximation)
     double bubble_radius = 0.7 * drop_radius;
-    return 3.26 / bubble_radius;
+    return 1 / (2.0 * PI * bubble_radius) * sqrt((3.0 * air_polytopic_index * p_atm) / (rho_water));
 }
 
 double sphere_surface_area(double radius) {

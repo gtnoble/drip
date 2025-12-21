@@ -8,3 +8,4 @@ drip
 drip-test-library
 /__pycache__/
 /memory-bank/
+/.venv/

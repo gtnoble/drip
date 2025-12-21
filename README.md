@@ -6,13 +6,13 @@ Generate pleasant, non-repetitive binaural rainfall audio using simplified wave 
 
 ## Features
 
-- **Physics-based synthesis**: Drop sizes follow Marshall-Palmer distribution, frequencies determined by Minnaert resonance or impact physics
+- **Physics-based synthesis**: Drop sizes follow Marshall-Palmer distribution, frequencies determined by Minnaert resonance
 - **Binaural rendering**: Independent wave propagation to each ear creates realistic spatial imaging
 - **Never repeats**: Generates unique audio each time (unless seeded)
-- **Multiple surface types**: Water (bubble resonance), hard surfaces (impact transients), capillary waves, pink/white noise
-- **Perceptually optimized**: Optional hearing threshold filtering removes inaudible drops
+- **Multiple surface types**: Water (bubble resonance), capillary waves, pink/white noise
+- **Perceptually optimized**: Hearing threshold filtering removes inaudible drops
 - **Unix-style**: Composes with standard audio tools (sox, ffmpeg)
-- **Fast generation**: Parallel processing, ~1-10× realtime
+- **High performance**: Streaming architecture with zero grain buffer allocation
 
 ## Installation
 
@@ -21,42 +21,54 @@ Generate pleasant, non-repetitive binaural rainfall audio using simplified wave 
 git clone <repository-url>
 cd drip
 
-# Create virtual environment (recommended)
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Install D compiler (Ubuntu/Debian)
+sudo apt install ldc dub
 
-# Install dependencies
-pip install -r requirements.txt
+# On macOS
+brew install ldc dub
+
+# Build project
+dub build
+
+# Or run directly with dub
+dub run -- --duration 60 --rain-rate 10
 ```
 
 **Requirements:**
-- Python 3.8+
-- NumPy ≥1.20.0
-- SciPy ≥1.7.0
+- D compiler (LDC, DMD, or GDC)
+- DUB (D's package manager)
+- Dependencies handled automatically by DUB
+  - mir-algorithm: Numerical operations and ndslice
+  - mir-random: Random number generation and probability distributions
+  - wave-d: WAV file I/O
+  - darg: Command-line argument parsing
 
 ## Quick Start
 
 ```bash
 # Generate 10 minutes of moderate rain
-./drip.py -d 600 --rain-rate 10 -o rain.wav
+./drip -d 600 --rain-rate 10 -o rain.wav
 
 # Heavy rain with higher drop density
-./drip.py -d 300 --rain-rate 25 --drop-rate 10000 -o heavy_rain.wav
+./drip -d 300 --rain-rate 25 --drop-rate 10000 -o heavy_rain.wav
 
 # Light drizzle (fewer, smaller drops)
-./drip.py -d 600 --rain-rate 5 --drop-rate 2000 -o drizzle.wav
+./drip -d 600 --rain-rate 5 --drop-rate 2000 -o drizzle.wav
 
-# Hard surface impacts (no bubble resonance)
-./drip.py -d 300 --surface-type hard -o roof_rain.wav
+# Capillary wave surface (surface tension dominated)
+./drip -d 300 --surface-type capillary -o capillary_rain.wav
 
 # Generate and normalize in pipeline
-./drip.py -d 600 --rain-rate 10 | sox -t wav - rain_normalized.wav norm
+./drip -d 600 --rain-rate 10 | sox -t wav - rain_normalized.wav norm
 ```
 
 ## Usage
 
 ```
-drip.py -d DURATION [options]
+./drip -d DURATION [options]
+
+# Or via DUB:
+dub run -- -d DURATION [options]
 
 Required:
   -d, --duration SECONDS      Duration of output audio
@@ -70,13 +82,8 @@ Key Parameters:
                              Default: 5000.0
                              Typical range: 1000-20000
 
-  -q, --quality-factor Q     Resonance quality (2=splashy, 20=tonal)
-                             Default: 10.0
-                             Only applies to water/capillary surfaces
-
   --surface-type TYPE        Impact surface:
                              - water: Minnaert bubble resonance (default)
-                             - hard: Ricker wavelet (rigid surfaces)
                              - capillary: Surface tension resonance
                              - pink_noise: Gaussian-windowed pink noise
                              - white_noise: Gaussian-windowed white noise
@@ -90,7 +97,6 @@ Output:
   -r, --sample-rate HZ       Sample rate (default: 44100)
 
 Performance:
-  -w, --workers N            Worker processes (default: auto-detect)
   -s, --seed N               Random seed for reproducibility
 
 Advanced:
@@ -105,62 +111,36 @@ Advanced:
 
 ```bash
 # Quick test (30 seconds)
-./drip.py -d 30 --rain-rate 15 -o test.wav
+./drip -d 30 --rain-rate 15 -o test.wav
 
 # Long-form ambience (1 hour)
-./drip.py -d 3600 --rain-rate 10 --drop-rate 3000 -o rain_1hr.wav
+./drip -d 3600 --rain-rate 10 --drop-rate 3000 -o rain_1hr.wav
 
 # Different intensities
-./drip.py -d 600 --rain-rate 5 --drop-rate 2000 -o light.wav   # Light
-./drip.py -d 600 --rain-rate 15 --drop-rate 5000 -o moderate.wav # Moderate
-./drip.py -d 600 --rain-rate 30 --drop-rate 10000 -o heavy.wav  # Heavy
+./drip -d 600 --rain-rate 5 --drop-rate 2000 -o light.wav   # Light
+./drip -d 600 --rain-rate 15 --drop-rate 5000 -o moderate.wav # Moderate
+./drip -d 600 --rain-rate 30 --drop-rate 10000 -o heavy.wav  # Heavy
 ```
 
 ### Surface Types
 
 ```bash
 # Water surface (bubble resonance)
-./drip.py -d 300 --surface-type water -q 10 -o water.wav
-
-# Hard surface (roof, pavement)
-./drip.py -d 300 --surface-type hard -o hard_surface.wav
+./drip -d 300 --surface-type water -o water.wav
 
 # Capillary waves (surface tension)
-./drip.py -d 300 --surface-type capillary -q 15 -o capillary.wav
+./drip -d 300 --surface-type capillary -o capillary.wav
 
 # Broadband noise impacts
-./drip.py -d 300 --surface-type pink_noise -o pink.wav
-./drip.py -d 300 --surface-type white_noise -o white.wav
-```
-
-### Unix Pipeline Integration
-
-```bash
-# Normalize to -3dB
-./drip.py -d 600 --rain-rate 10 | sox -t wav - rain_norm.wav norm -3
-
-# Convert to MP3
-./drip.py -d 600 --rain-rate 10 | ffmpeg -i pipe:0 -b:a 192k rain.mp3
-
-# Apply EQ (boost low frequencies)
-./drip.py -d 600 --rain-rate 10 | sox -t wav - rain_eq.wav bass +6
-
-# Create seamless loop (crossfade)
-./drip.py -d 600 --rain-rate 10 -o rain.wav
-sox rain.wav rain.wav rain_loop.wav splice 600,0.5
-
-# Mix multiple layers
-./drip.py -d 300 --rain-rate 20 --surface-type water -o layer1.wav
-./drip.py -d 300 --rain-rate 10 --surface-type hard -o layer2.wav
-sox -m layer1.wav layer2.wav mixed.wav
-```
+./drip -d 300 --surface-type pink_noise -o pink.wav
+./drip -d 300 --surface-type white_noise -o white.wav
 
 ### Reproducible Generation
 
 ```bash
 # Same seed produces identical output
-./drip.py -d 60 --rain-rate 10 -s 42 -o version1.wav
-./drip.py -d 60 --rain-rate 10 -s 42 -o version2.wav
+./drip -d 60 --rain-rate 10 --seed 42 -o version1.wav
+./drip -d 60 --rain-rate 10 --seed 42 -o version2.wav
 # version1.wav and version2.wav are identical
 ```
 
@@ -198,7 +178,9 @@ Parameters → M-H Sampling → Grain Synthesis → Wave Propagation → Binaura
 ```
 
 1. **Metropolis-Hastings Sampling**: Generates drop positions and sizes that are audible
-2. **Grain Generation**: Filtered impulse (water) or Ricker wavelet (hard surface)
+2. **Streaming Grain Generation**: 
+   - Water/Capillary: Unit impulse → biquad filter (single-pass)
+   - Pink/White Noise: Voss-McCartney/Gaussian → Gaussian window
 3. **Propagation**: Independent calculation for each ear
 4. **Mixing**: Linear superposition of all grains
 
@@ -229,10 +211,12 @@ This dramatically reduces computation while maintaining perceptual quality.
 
 ### Quality Factor (Q)
 
-Controls the resonance bandwidth (water/capillary surfaces only):
-- **Low Q (2-5)**: Splashy, broadband, natural rain sound
-- **Medium Q (8-12)**: Balanced, pleasant resonance
-- **High Q (15-20)**: Tonal, ringing, musical
+The D implementation uses physics-based quality factors calculated from drop properties:
+- **Water surface**: Q based on Minnaert resonance model (acoustic radiation resistance vs viscous resistance)
+- **Capillary surface**: Q based on surface tension mechanics (mass inductance vs tension capacitance)
+- **Noise surfaces**: Q not applicable (broadband by nature)
+
+These physics-based Q factors vary with drop size, producing natural variation without manual control.
 
 ### Listener Height
 
@@ -240,19 +224,6 @@ Height above the raindrop plane affects:
 - Spatial distribution (higher = narrower audible region)
 - Distance-dependent filtering (higher = more air absorption)
 - Typical values: 0.5m (sitting), 1.7m (standing), 3.0m (elevated)
-
-## Diagnostic Tools
-
-### Audible Region Visualization
-
-Visualize which drops are audible vs inaudible:
-
-```bash
-./plot_audible_region.py -o audible_region.png
-./plot_audible_region.py --surface-type hard -o audible_hard.png
-```
-
-Shows a 2D plot of radius vs distance, with black = audible, white = inaudible.
 
 ## Technical Details
 
@@ -263,12 +234,6 @@ Shows a 2D plot of radius vs distance, with black = audible, white = inaudible.
 - Filter centered at Minnaert frequency
 - Bandwidth controlled by Q factor
 - Models bubble oscillation
-
-**Hard Surface** (`--surface-type hard`):
-- Ricker wavelet (2nd derivative of Gaussian)
-- Frequency based on contact time
-- Models impulsive collision transient
-- No resonance (Q ignored)
 
 **Capillary** (`--surface-type capillary`):
 - Same as water but frequency from surface tension
@@ -284,7 +249,7 @@ Shows a 2D plot of radius vs distance, with black = audible, white = inaudible.
 ### Air Absorption Model
 
 Simplified frequency-dependent absorption:
-```python
+```
 alpha(f) ≈ 0.02 × (f/1000)^1.5  dB/100m
 gain = 10^(-alpha × distance/100 / 20)
 ```
